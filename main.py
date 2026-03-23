@@ -2,14 +2,29 @@ import asyncio
 import logging
 import subprocess
 import sys
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
 
+# ── Web server بسيط لإرضاء Render ──
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+    def log_message(self, format, *args):
+        pass
+
+def run_health_server():
+    server = HTTPServer(("0.0.0.0", 10000), HealthHandler)
+    server.serve_forever()
+
 def install_playwright():
-    print("🔧 جاري تحميل متصفح Firefox...")
+    print("🔧 جاري تحميل متصفح Chromium...")
     subprocess.run(
-        [sys.executable, "-m", "playwright", "install", "firefox"],
+        [sys.executable, "-m", "playwright", "install", "chromium"],
         check=True
     )
     print("✅ تم تثبيت المتصفح بنجاح!")
@@ -58,19 +73,20 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def run_automation(url: str, update: Update) -> str:
     async with async_playwright() as p:
-        browser = await p.firefox.launch(headless=True)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        )
         ctx = await browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         )
         page = await ctx.new_page()
 
-        # ── المرحلة 1 ──
         await update.message.reply_text("📡 المرحلة 1: فتح رابط Qwiklabs...")
         await page.goto(url, wait_until="networkidle", timeout=60000)
         await asyncio.sleep(3)
 
-        # ── المرحلة 2: Google SSO ──
         await update.message.reply_text("🔐 المرحلة 2: الموافقة على Google SSO...")
         try:
             accept_btn = page.locator("button:has-text('أفهم ذلك'), button:has-text('I understand'), button:has-text('Accept')")
@@ -83,7 +99,6 @@ async def run_automation(url: str, update: Update) -> str:
         except Exception as e:
             await update.message.reply_text(f"⚠️ تخطي SSO: {str(e)[:80]}")
 
-        # ── المرحلة 3: شروط Google Cloud ──
         await update.message.reply_text("📋 المرحلة 3: الموافقة على شروط Google Cloud...")
         try:
             await page.wait_for_selector("text=I agree to the Google Cloud Platform", timeout=15000)
@@ -99,12 +114,10 @@ async def run_automation(url: str, update: Update) -> str:
         except Exception as e:
             await update.message.reply_text(f"⚠️ تخطي شروط Cloud: {str(e)[:80]}")
 
-        # ── المرحلة 4: Cloud Run ──
         await update.message.reply_text("☁️ المرحلة 4: الذهاب إلى Cloud Run...")
         await page.goto("https://console.cloud.google.com/run", wait_until="networkidle", timeout=30000)
         await asyncio.sleep(3)
 
-        # ── المرحلة 5: Create Service ──
         await update.message.reply_text("🔧 المرحلة 5: إنشاء Cloud Run Service...")
         try:
             create_btn = page.locator("button:has-text('Create service'), a:has-text('Create service')")
@@ -117,7 +130,6 @@ async def run_automation(url: str, update: Update) -> str:
             await browser.close()
             return None
 
-        # ── المرحلة 6: Container Image ──
         await update.message.reply_text("🐳 المرحلة 6: إدخال Container Image...")
         try:
             img_input = page.locator("input[placeholder*='Container image URL'], input[aria-label*='Container image']")
@@ -128,7 +140,6 @@ async def run_automation(url: str, update: Update) -> str:
         except Exception as e:
             await update.message.reply_text(f"⚠️ مشكلة في Container URL: {str(e)[:80]}")
 
-        # ── المرحلة 7: الإعدادات ──
         await update.message.reply_text("⚙️ المرحلة 7: ضبط الإعدادات...")
         try:
             instance_radio = page.locator("label:has-text('Instance-based')")
@@ -147,7 +158,6 @@ async def run_automation(url: str, update: Update) -> str:
         except Exception as e:
             await update.message.reply_text(f"⚠️ مشكلة في الإعدادات: {str(e)[:80]}")
 
-        # ── المرحلة 8: استخراج URL ──
         await update.message.reply_text("🔗 المرحلة 8: استخراج Endpoint URL...")
         endpoint_url = ""
         try:
@@ -157,7 +167,6 @@ async def run_automation(url: str, update: Update) -> str:
         except:
             pass
 
-        # ── المرحلة 9: Create ──
         await update.message.reply_text("🚀 المرحلة 9: الضغط على Create...")
         try:
             final_create = page.locator("button:has-text('Create')").last
@@ -180,7 +189,13 @@ async def run_automation(url: str, update: Update) -> str:
         return endpoint_url
 
 def main():
+    # شغل health server في thread منفصل
+    t = threading.Thread(target=run_health_server, daemon=True)
+    t.start()
+    print("🌐 Health server يعمل على port 10000")
+
     install_playwright()
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
