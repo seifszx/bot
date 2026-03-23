@@ -1,7 +1,6 @@
 services:
   - type: worker
     name: qwiklabs-bot
-    env: python
-    buildCommand: "./build.sh"
-    startCommand: "python qwiklabs_bot.py"
+    env: docker
     plan: free
+    dockerfilePath: ./Dockerfile
