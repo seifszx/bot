@@ -1,7 +1,5 @@
 import asyncio
 import logging
-import subprocess
-import sys
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
@@ -27,13 +25,7 @@ BOT_TOKEN = "8531850036:AAHnfGVBm7PxNkPVeqUXdrOGD0C-apBGZDo"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 مرحباً!\n\n"
-        "أرسل لي رابط Qwiklabs وسأقوم بـ:\n"
-        "1️⃣ فتح الرابط تلقائياً\n"
-        "2️⃣ الموافقة على شروط Google\n"
-        "3️⃣ إنشاء Cloud Run Service\n"
-        "4️⃣ إرسال الـ Endpoint URL إليك\n\n"
-        "📎 أرسل الرابط الآن!"
+        "مرحبا بيك في بوت يوهان 🤖\n\nارسل رابط لبدأ عمل"
     )
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,7 +78,7 @@ async def run_automation(url: str, update: Update) -> str:
         )
         page = await ctx.new_page()
 
-        # ── المرحلة 1 ──
+        # المرحلة 1
         await update.message.reply_text("📡 المرحلة 1: فتح رابط Qwiklabs...")
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=90000)
@@ -95,7 +87,7 @@ async def run_automation(url: str, update: Update) -> str:
         await asyncio.sleep(5)
         await send_screenshot(page, update, "بعد فتح الرابط")
 
-        # ── المرحلة 2: SSO ──
+        # المرحلة 2: SSO
         await update.message.reply_text("🔐 المرحلة 2: الموافقة على Google SSO...")
         try:
             for selector in [
@@ -115,7 +107,7 @@ async def run_automation(url: str, update: Update) -> str:
         except Exception as e:
             await update.message.reply_text(f"⚠️ SSO: {str(e)[:80]}")
 
-        # ── المرحلة 3: شروط Cloud ──
+        # المرحلة 3: شروط Cloud
         await update.message.reply_text("📋 المرحلة 3: شروط Google Cloud...")
         try:
             await page.wait_for_load_state("networkidle", timeout=30000)
@@ -134,13 +126,13 @@ async def run_automation(url: str, update: Update) -> str:
         except Exception as e:
             await update.message.reply_text(f"⚠️ شروط Cloud: {str(e)[:80]}")
 
-        # ── المرحلة 4: Cloud Run ──
+        # المرحلة 4: Cloud Run
         await update.message.reply_text("☁️ المرحلة 4: الذهاب إلى Cloud Run...")
         await page.goto("https://console.cloud.google.com/run", wait_until="domcontentloaded", timeout=60000)
         await asyncio.sleep(6)
         await send_screenshot(page, update, "صفحة Cloud Run")
 
-        # ── المرحلة 5: Create Service ──
+        # المرحلة 5: Create Service
         await update.message.reply_text("🔧 المرحلة 5: إنشاء Cloud Run Service...")
         clicked = False
         for selector in [
@@ -170,7 +162,7 @@ async def run_automation(url: str, update: Update) -> str:
             await browser.close()
             return None
 
-        # ── المرحلة 6: Container Image ──
+        # المرحلة 6: Container Image
         await update.message.reply_text("🐳 المرحلة 6: إدخال Container Image...")
         try:
             for selector in [
@@ -188,7 +180,7 @@ async def run_automation(url: str, update: Update) -> str:
         except Exception as e:
             await update.message.reply_text(f"⚠️ Container URL: {str(e)[:80]}")
 
-        # ── المرحلة 7: الإعدادات ──
+        # المرحلة 7: الإعدادات
         await update.message.reply_text("⚙️ المرحلة 7: ضبط الإعدادات...")
         try:
             await safe_click(page, "label:has-text('Instance-based')", 10000)
@@ -203,7 +195,7 @@ async def run_automation(url: str, update: Update) -> str:
         except Exception as e:
             await update.message.reply_text(f"⚠️ الإعدادات: {str(e)[:80]}")
 
-        # ── المرحلة 8: Endpoint URL ──
+        # المرحلة 8: Endpoint URL
         await update.message.reply_text("🔗 المرحلة 8: استخراج Endpoint URL...")
         endpoint_url = ""
         try:
@@ -216,7 +208,7 @@ async def run_automation(url: str, update: Update) -> str:
         except:
             pass
 
-        # ── المرحلة 9: Create ──
+        # المرحلة 9: Create
         await update.message.reply_text("🚀 المرحلة 9: الضغط على Create...")
         try:
             await safe_click(page, "button:has-text('Create')", 10000)
@@ -244,8 +236,9 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
-    print("🤖 البوت يعمل...")
+    print("🤖 بوت يوهان يعمل...")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+
