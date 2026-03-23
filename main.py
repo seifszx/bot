@@ -66,15 +66,18 @@ async def safe_click(page, selector, timeout=30000):
 
 async def run_automation(url: str, update: Update) -> str:
     async with async_playwright() as p:
-        # headless=False مع xvfb يحل مشكلة الصفحة السوداء
         browser = await p.chromium.launch(
-            headless=False,
+            headless=True,
             args=[
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
+                "--disable-web-security",
+                "--allow-running-insecure-content",
+                "--disable-features=IsolateOrigins,site-per-process",
                 "--window-size=1280,800",
+                "--force-device-scale-factor=1",
             ]
         )
         ctx = await browser.new_context(
@@ -83,65 +86,72 @@ async def run_automation(url: str, update: Update) -> str:
             locale="en-US",
             timezone_id="America/New_York",
             ignore_https_errors=True,
+            java_script_enabled=True,
         )
         await ctx.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
+            window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
         """)
         page = await ctx.new_page()
 
         # المرحلة 1
         await update.message.reply_text("📡 المرحلة 1: فتح رابط Qwiklabs...")
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
-        except:
-            pass
-        await asyncio.sleep(8)
+            await page.goto(url, wait_until="commit", timeout=90000)
+            # انتظر حتى يكتمل تسجيل الدخول التلقائي
+            await asyncio.sleep(10)
+            # انتظر أن نصل لـ Google Cloud Console
+            try:
+                await page.wait_for_url("*console.cloud.google.com*", timeout=45000)
+                await update.message.reply_text("✅ تم تسجيل الدخول وصلنا لـ Google Cloud!")
+            except:
+                pass
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ خطأ في فتح الرابط: {str(e)[:80]}")
+
+        await asyncio.sleep(3)
         await send_screenshot(page, update, "بعد فتح الرابط")
 
-        # المرحلة 2: SSO - انتظر أكثر لأن الصفحة تمر بمراحل
-        await update.message.reply_text("🔐 المرحلة 2: انتظار تسجيل الدخول التلقائي...")
+        # المرحلة 2: موافقة SSO إن وجدت
+        await update.message.reply_text("🔐 المرحلة 2: فحص صفحة SSO...")
         try:
-            # انتظر حتى تختفي صفحة تسجيل الدخول
-            await page.wait_for_url("**/console.cloud.google.com/**", timeout=60000)
-            await update.message.reply_text("✅ تم تسجيل الدخول!")
-        except:
-            # جرب الضغط على أي زرار ظاهر
             for selector in [
                 "button:has-text('أفهم ذلك')",
                 "button:has-text('I understand')",
                 "button:has-text('Accept')",
                 "button:has-text('Continue')",
-                "button:has-text('Next')",
             ]:
                 btn = page.locator(selector)
                 if await btn.count() > 0:
                     await btn.first.click()
                     await asyncio.sleep(3)
+                    await update.message.reply_text("✅ تم الضغط على زر الموافقة")
                     break
-            await asyncio.sleep(5)
-            await send_screenshot(page, update, "بعد المحاولة")
+        except:
+            pass
 
-        # المرحلة 3: شروط Cloud
+        # المرحلة 3: شروط Google Cloud
         await update.message.reply_text("📋 المرحلة 3: شروط Google Cloud...")
         try:
             await page.wait_for_load_state("networkidle", timeout=20000)
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
             checkbox = page.locator("input[type='checkbox']").first
-            if await checkbox.count() > 0:
-                if not await checkbox.is_checked():
-                    await checkbox.click()
-                    await asyncio.sleep(1)
-            clicked = await safe_click(page, "button:has-text('Agree and continue')", 10000)
+            if await checkbox.count() > 0 and not await checkbox.is_checked():
+                await checkbox.click()
+                await asyncio.sleep(1)
+            clicked = await safe_click(page, "button:has-text('Agree and continue')", 8000)
             if clicked:
                 await asyncio.sleep(4)
                 await update.message.reply_text("✅ تمت الموافقة على شروط Google Cloud")
             else:
-                await update.message.reply_text("⏭️ لا توجد شروط، تخطي...")
+                await update.message.reply_text("⏭️ تخطي الشروط...")
         except Exception as e:
-            await update.message.reply_text(f"⚠️ شروط Cloud: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ شروط: {str(e)[:80]}")
 
         # المرحلة 4: Cloud Run
         await update.message.reply_text("☁️ المرحلة 4: الذهاب إلى Cloud Run...")
@@ -195,7 +205,7 @@ async def run_automation(url: str, update: Update) -> str:
                     await update.message.reply_text("✅ تم إدخال Container Image")
                     break
         except Exception as e:
-            await update.message.reply_text(f"⚠️ Container URL: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ Container: {str(e)[:80]}")
 
         # المرحلة 7: الإعدادات
         await update.message.reply_text("⚙️ المرحلة 7: ضبط الإعدادات...")
