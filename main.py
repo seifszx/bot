@@ -1,12 +1,14 @@
 import asyncio
 import logging
 import threading
+import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
 
-# ── Health Server - يشتغل أول شيء ──
+PORT = int(os.environ.get("PORT", 10000))
+
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -15,14 +17,11 @@ class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-def run_health_server():
-    server = HTTPServer(("0.0.0.0", 10000), HealthHandler)
-    print("🌐 Health server يعمل على port 10000")
-    server.serve_forever()
-
-# شغّل health server فوراً قبل أي شيء
-health_thread = threading.Thread(target=run_health_server, daemon=True)
-health_thread.start()
+# شغّل health server فوراً عند import الملف
+_server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+_thread = threading.Thread(target=_server.serve_forever, daemon=True)
+_thread.start()
+print(f"🌐 Health server يعمل على port {PORT}", flush=True)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -233,7 +232,7 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
-    print("🤖 بوت يوهان يعمل...")
+    print("🤖 بوت يوهان يعمل...", flush=True)
     app.run_polling()
 
 if __name__ == "__main__":
