@@ -1,240 +1,193 @@
-import asyncio
-import logging
-import threading
 import os
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import asyncio
+from datetime import datetime
 from playwright.async_api import async_playwright
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-PORT = int(os.environ.get("PORT", 10000))
+# ===================== التوكن =====================
+TOKEN = "8531850036:AAHnfGVBm7PxNkPVeqUXdrOGD0C-apBGZDo"
 
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-    def log_message(self, format, *args):
-        pass
+# ===================== مجلد للصور =====================
+if not os.path.exists("screenshots"):
+    os.makedirs("screenshots")
 
-# شغّل health server فوراً عند import الملف
-_server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-_thread = threading.Thread(target=_server.serve_forever, daemon=True)
-_thread.start()
-print(f"🌐 Health server يعمل على port {PORT}", flush=True)
+async def take_screenshot(page, name, update, context):
+    """التقاط لقطة شاشة وإرسالها للمستخدم"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"screenshots/{name}_{timestamp}.png"
+    await page.screenshot(path=filename, full_page=True)
+    await context.bot.send_photo(chat_id=update.effective_chat.id, photo=open(filename, 'rb'))
+    return filename
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-BOT_TOKEN = "8531850036:AAHnfGVBm7PxNkPVeqUXdrOGD0C-apBGZDo"
+async def automate_google_cloud(url, update, context):
+    """تنفيذ الأتمتة الكاملة في Google Cloud"""
+    
+    await update.message.reply_text("🚀 جاري تشغيل المتصفح...")
+    
+    async with async_playwright() as p:
+        # تشغيل المتصفح
+        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+        context_browser = await browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        )
+        page = await context_browser.new_page()
+        
+        # 1. فتح الرابط
+        await update.message.reply_text("📂 جاري فتح الرابط...")
+        await page.goto(url, wait_until="networkidle", timeout=60000)
+        await asyncio.sleep(3)
+        await take_screenshot(page, "01_opened", update, context)
+        
+        # 2. البحث عن زر الموافقة على الشروط (Agree / Continue)
+        await update.message.reply_text("🔍 جاري البحث عن أزرار الموافقة...")
+        try:
+            agree_buttons = await page.query_selector_all("text=/Agree|Continue|موافق|I agree/i")
+            for button in agree_buttons:
+                if await button.is_visible():
+                    await button.click()
+                    await asyncio.sleep(2)
+                    await take_screenshot(page, "02_agreed", update, context)
+                    await update.message.reply_text("✅ تم الضغط على زر الموافقة")
+                    break
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ لم يتم العثور على زر موافقة: {str(e)}")
+        
+        # 3. البحث عن زر Create service
+        await update.message.reply_text("🔍 جاري البحث عن زر Create service...")
+        try:
+            create_buttons = await page.query_selector_all("text=/Create service|Create/i")
+            for button in create_buttons:
+                if await button.is_visible():
+                    await button.click()
+                    await asyncio.sleep(3)
+                    await take_screenshot(page, "03_clicked_create_service", update, context)
+                    await update.message.reply_text("✅ تم الضغط على Create service")
+                    break
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ لم يتم العثور على Create service: {str(e)}")
+        
+        # 4. إدخال رابط الحاوية (Container image URL)
+        await update.message.reply_text("📝 جاري إدخال رابط الحاوية...")
+        try:
+            # البحث عن حقل إدخال النص
+            input_field = await page.query_selector("input[type='text'], input:not([type])")
+            if input_field:
+                await input_field.fill("docker.io/seifszx/seifszx")
+                await asyncio.sleep(2)
+                await take_screenshot(page, "04_filled_container", update, context)
+                await update.message.reply_text("✅ تم إدخال رابط الحاوية: docker.io/seifszx/seifszx")
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ فشل إدخال رابط الحاوية: {str(e)}")
+        
+        # 5. تفعيل خيار Request-based billing (إذا كان موجوداً)
+        await update.message.reply_text("⚙️ جاري تفعيل خيارات الفوترة...")
+        try:
+            # البحث عن خيار Request-based
+            request_option = await page.query_selector("text=/Request-based|Request based/i")
+            if request_option:
+                await request_option.click()
+                await asyncio.sleep(1)
+                await take_screenshot(page, "05_billing_option", update, context)
+                await update.message.reply_text("✅ تم تفعيل خيار Request-based billing")
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ لم يتم العثور على خيار الفوترة: {str(e)}")
+        
+        # 6. البحث عن زر Create النهائي
+        await update.message.reply_text("🔍 جاري البحث عن زر Create...")
+        try:
+            final_create = await page.query_selector("text=/Create$/i")
+            if final_create:
+                await final_create.click()
+                await asyncio.sleep(5)
+                await take_screenshot(page, "06_final_create", update, context)
+                await update.message.reply_text("✅ تم الضغط على Create")
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ لم يتم العثور على زر Create: {str(e)}")
+        
+        # 7. الحصول على الرابط النهائي (Endpoint URL)
+        await update.message.reply_text("🔗 جاري استخراج الرابط النهائي...")
+        final_url = page.url
+        await take_screenshot(page, "07_final_url", update, context)
+        
+        # محاولة العثور على Endpoint URL في الصفحة
+        try:
+            endpoint_element = await page.query_selector("text=/https:\\/\\/[a-z0-9\\-\\.]+\\.run\\.app/i")
+            if endpoint_element:
+                endpoint_text = await endpoint_element.text_content()
+                await update.message.reply_text(f"🌐 **الرابط النهائي:**\n`{endpoint_text}`", parse_mode="Markdown")
+        except:
+            pass
+        
+        await browser.close()
+        return final_url
 
+# ===================== أوامر البوت =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """الأمر /start"""
     await update.message.reply_text(
-        "مرحبا بيك في بوت يوهان 🤖\n\nارسل رابط لبدأ عمل"
+        "🤖 **مرحباً بك في بوت أتمتة Google Cloud!**\n\n"
+        "أرسل لي رابط Google Cloud وسأقوم بـ:\n"
+        "1️⃣ فتح الرابط\n"
+        "2️⃣ الضغط على زر الموافقة\n"
+        "3️⃣ الضغط على Create service\n"
+        "4️⃣ إدخال رابط الحاوية\n"
+        "5️⃣ تفعيل خيارات الفوترة\n"
+        "6️⃣ الضغط على Create\n"
+        "7️⃣ إرسال الرابط النهائي\n\n"
+        "📸 **سأرسل لك لقطة شاشة بعد كل خطوة**\n\n"
+        "✨ **أرسل الرابط الآن:**",
+        parse_mode="Markdown"
     )
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-    url = update.message.text.strip()
+    """معالجة الرابط المرسل من المستخدم"""
+    url = update.message.text
+    
+    # التأكد من أن الرابط صالح
     if not url.startswith("http"):
-        await update.message.reply_text("❌ يرجى إرسال رابط صحيح يبدأ بـ http")
+        await update.message.reply_text("❌ الرجاء إرسال رابط صحيح يبدأ بـ http:// أو https://")
         return
-    await update.message.reply_text("🚀 بدأت العملية... انتظر!")
+    
+    await update.message.reply_text(f"✅ تم استلام الرابط:\n`{url}`\n\n⏳ جاري تنفيذ الأتمتة...", parse_mode="Markdown")
+    
     try:
-        endpoint_url = await run_automation(url, update)
-        if endpoint_url:
-            await update.message.reply_text(
-                f"✅ تم بنجاح!\n\n🔗 Endpoint URL:\n`{endpoint_url}`",
-                parse_mode="Markdown"
-            )
-        else:
-            await update.message.reply_text("⚠️ انتهت العملية لكن لم أتمكن من استخراج الـ URL.")
+        final_url = await automate_google_cloud(url, update, context)
+        await update.message.reply_text(
+            f"✅ **تمت العملية بنجاح!**\n\n"
+            f"🔗 **الرابط النهائي:**\n`{final_url}`\n\n"
+            f"📸 تم إرسال لقطات الشاشة أعلاه",
+            parse_mode="Markdown"
+        )
     except Exception as e:
-        logger.error(f"Error: {e}")
-        await update.message.reply_text(f"❌ حدث خطأ:\n{str(e)[:200]}")
+        await update.message.reply_text(f"❌ **حدث خطأ:**\n`{str(e)}`", parse_mode="Markdown")
 
-async def send_screenshot(page, update, label):
-    try:
-        screenshot = await page.screenshot(full_page=False)
-        await update.message.reply_photo(photo=screenshot, caption=f"📸 {label}")
-    except:
-        pass
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """الأمر /help"""
+    await update.message.reply_text(
+        "📖 **كيفية الاستخدام:**\n\n"
+        "1. أرسل رابط Google Cloud الذي تريد أتمتته\n"
+        "2. انتظر حتى يتم التنفيذ\n"
+        "3. ستستلم لقطة شاشة بعد كل خطوة\n"
+        "4. ستستلم الرابط النهائي في النهاية\n\n"
+        "⚙️ **الأوامر:**\n"
+        "/start - بدء البوت\n"
+        "/help - عرض هذه المساعدة",
+        parse_mode="Markdown"
+    )
 
-async def safe_click(page, selector, timeout=30000):
-    try:
-        el = page.locator(selector)
-        await el.first.wait_for(state="visible", timeout=timeout)
-        await el.first.click()
-        return True
-    except:
-        return False
-
-async def run_automation(url: str, update: Update) -> str:
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-web-security",
-                "--disable-features=IsolateOrigins,site-per-process",
-                "--window-size=1280,800",
-            ]
-        )
-        ctx = await browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            locale="en-US",
-            timezone_id="America/New_York",
-            ignore_https_errors=True,
-        )
-        await ctx.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
-        """)
-        page = await ctx.new_page()
-
-        await update.message.reply_text("📡 المرحلة 1: فتح رابط Qwiklabs...")
-        try:
-            await page.goto(url, wait_until="commit", timeout=90000)
-            await asyncio.sleep(10)
-            try:
-                await page.wait_for_url("*console.cloud.google.com*", timeout=45000)
-                await update.message.reply_text("✅ تم تسجيل الدخول!")
-            except:
-                pass
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ {str(e)[:80]}")
-
-        await asyncio.sleep(3)
-        await send_screenshot(page, update, "بعد فتح الرابط")
-
-        await update.message.reply_text("🔐 المرحلة 2: فحص SSO...")
-        try:
-            for selector in ["button:has-text('أفهم ذلك')", "button:has-text('I understand')", "button:has-text('Accept')", "button:has-text('Continue')"]:
-                btn = page.locator(selector)
-                if await btn.count() > 0:
-                    await btn.first.click()
-                    await asyncio.sleep(3)
-                    break
-        except:
-            pass
-
-        await update.message.reply_text("📋 المرحلة 3: شروط Google Cloud...")
-        try:
-            await page.wait_for_load_state("networkidle", timeout=20000)
-            await asyncio.sleep(2)
-            checkbox = page.locator("input[type='checkbox']").first
-            if await checkbox.count() > 0 and not await checkbox.is_checked():
-                await checkbox.click()
-                await asyncio.sleep(1)
-            clicked = await safe_click(page, "button:has-text('Agree and continue')", 8000)
-            if clicked:
-                await asyncio.sleep(4)
-                await update.message.reply_text("✅ تمت الموافقة")
-            else:
-                await update.message.reply_text("⏭️ تخطي...")
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ {str(e)[:80]}")
-
-        await update.message.reply_text("☁️ المرحلة 4: Cloud Run...")
-        await page.goto("https://console.cloud.google.com/run", wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(6)
-        await send_screenshot(page, update, "صفحة Cloud Run")
-
-        await update.message.reply_text("🔧 المرحلة 5: Create Service...")
-        clicked = False
-        for selector in ["button:has-text('Create service')", "a:has-text('Create service')", "button:has-text('Create')"]:
-            try:
-                el = page.locator(selector)
-                if await el.count() > 0:
-                    await el.first.click()
-                    clicked = True
-                    await asyncio.sleep(4)
-                    await update.message.reply_text("✅ تم فتح Create Service")
-                    break
-            except:
-                continue
-
-        if not clicked:
-            try:
-                buttons = await page.locator("button").all_text_contents()
-                await update.message.reply_text(f"🔍 الأزرار:\n{str(buttons)[:300]}")
-            except:
-                pass
-            await send_screenshot(page, update, "لم أجد زر Create")
-            await browser.close()
-            return None
-
-        await update.message.reply_text("🐳 المرحلة 6: Container Image...")
-        try:
-            for selector in ["input[placeholder*='Container image URL']", "input[aria-label*='Container image']", "input[placeholder*='gcr.io']"]:
-                img_input = page.locator(selector)
-                if await img_input.count() > 0:
-                    await img_input.first.fill("docker.io/seifszx/seifszx")
-                    await asyncio.sleep(1)
-                    await update.message.reply_text("✅ تم إدخال Container Image")
-                    break
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ {str(e)[:80]}")
-
-        await update.message.reply_text("⚙️ المرحلة 7: الإعدادات...")
-        try:
-            await safe_click(page, "label:has-text('Instance-based')", 10000)
-            await asyncio.sleep(1)
-            min_input = page.locator("input[aria-label*='Minimum'], input[placeholder*='Minimum']")
-            if await min_input.count() > 0:
-                await min_input.first.fill("1")
-            max_input = page.locator("input[aria-label*='Maximum'], input[placeholder*='Maximum']")
-            if await max_input.count() > 0:
-                await max_input.first.fill("16")
-            await update.message.reply_text("✅ Instance-based, Min=1, Max=16")
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ {str(e)[:80]}")
-
-        await update.message.reply_text("🔗 المرحلة 8: Endpoint URL...")
-        endpoint_url = ""
-        try:
-            for selector in ["text=.run.app", "[aria-label*='Endpoint']"]:
-                el = page.locator(selector)
-                if await el.count() > 0:
-                    endpoint_url = (await el.first.inner_text()).strip()
-                    if ".run.app" in endpoint_url:
-                        break
-        except:
-            pass
-
-        await update.message.reply_text("🚀 المرحلة 9: Create...")
-        try:
-            await safe_click(page, "button:has-text('Create')", 10000)
-            await asyncio.sleep(8)
-            await update.message.reply_text("✅ تم!")
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ {str(e)[:80]}")
-
-        if not endpoint_url:
-            try:
-                await asyncio.sleep(5)
-                url_el = page.locator("a[href*='.run.app']")
-                if await url_el.count() > 0:
-                    endpoint_url = await url_el.first.get_attribute("href")
-            except:
-                pass
-
-        await browser.close()
-        return endpoint_url
-
+# ===================== تشغيل البوت =====================
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
+    
+    # إضافة الأوامر
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
-    print("🤖 بوت يوهان يعمل...", flush=True)
+    
+    print("🤖 البوت يعمل...")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-
