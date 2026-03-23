@@ -3,12 +3,10 @@ import logging
 import subprocess
 import sys
 import threading
-import shutil
-import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from playwright.async_api import async_playwright
+from patchright.async_api import async_playwright
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -21,30 +19,6 @@ class HealthHandler(BaseHTTPRequestHandler):
 def run_health_server():
     server = HTTPServer(("0.0.0.0", 10000), HealthHandler)
     server.serve_forever()
-
-def install_playwright():
-    print("🔧 جاري تحميل متصفح Chromium...")
-    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-    print("✅ تم تثبيت المتصفح بنجاح!")
-
-def clear_browser_cache():
-    """مسح كل بيانات المتصفح"""
-    paths = [
-        "/tmp/playwright_chromium*",
-        os.path.expanduser("~/.cache/ms-playwright/chromium*/Default/Cache"),
-        os.path.expanduser("~/.cache/ms-playwright/chromium*/Default/Cookies"),
-    ]
-    for path in paths:
-        import glob
-        for p in glob.glob(path):
-            try:
-                if os.path.isdir(p):
-                    shutil.rmtree(p)
-                else:
-                    os.remove(p)
-            except:
-                pass
-    print("🧹 تم مسح الـ cache")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -87,8 +61,8 @@ async def send_screenshot(page, update, label):
     try:
         screenshot = await page.screenshot(full_page=False)
         await update.message.reply_photo(photo=screenshot, caption=f"📸 {label}")
-    except Exception as e:
-        await update.message.reply_text(f"📸 فشل screenshot: {str(e)[:80]}")
+    except:
+        pass
 
 async def safe_click(page, selector, timeout=30000):
     try:
@@ -100,45 +74,16 @@ async def safe_click(page, selector, timeout=30000):
         return False
 
 async def run_automation(url: str, update: Update) -> str:
-    # مسح cache قبل كل عملية
-    clear_browser_cache()
-    await update.message.reply_text("🧹 تم مسح بيانات المتصفح القديمة")
-
     async with async_playwright() as p:
-        # إعدادات تجعل المتصفح يبدو طبيعياً
         browser = await p.chromium.launch(
             headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
-                "--window-size=1280,800",
-                "--start-maximized",
-                "--ignore-certificate-errors",
-            ]
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         )
-
-        # Context جديد نظيف مع إعدادات طبيعية
         ctx = await browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             locale="en-US",
             timezone_id="America/New_York",
-            permissions=["geolocation"],
-            java_script_enabled=True,
-            ignore_https_errors=True,
         )
-
-        # إخفاء علامات الأتمتة
-        await ctx.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            window.chrome = { runtime: {} };
-        """)
-
         page = await ctx.new_page()
 
         # ── المرحلة 1 ──
@@ -149,33 +94,6 @@ async def run_automation(url: str, update: Update) -> str:
             pass
         await asyncio.sleep(5)
         await send_screenshot(page, update, "بعد فتح الرابط")
-
-        # تحقق من "Couldn't sign you in"
-        page_content = await page.content()
-        if "Couldn't sign you in" in page_content or "couldn't sign" in page_content.lower():
-            await update.message.reply_text("⚠️ ظهرت مشكلة تسجيل الدخول، جاري إعادة المحاولة...")
-            await browser.close()
-            clear_browser_cache()
-            await asyncio.sleep(3)
-            # إعادة المحاولة مرة ثانية
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
-                      "--disable-blink-features=AutomationControlled"]
-            )
-            ctx = await browser.new_context(
-                viewport={"width": 1280, "height": 800},
-                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                locale="en-US",
-            )
-            await ctx.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                window.chrome = { runtime: {} };
-            """)
-            page = await ctx.new_page()
-            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
-            await asyncio.sleep(5)
-            await send_screenshot(page, update, "إعادة المحاولة")
 
         # ── المرحلة 2: SSO ──
         await update.message.reply_text("🔐 المرحلة 2: الموافقة على Google SSO...")
@@ -237,7 +155,7 @@ async def run_automation(url: str, update: Update) -> str:
                     await el.first.click()
                     clicked = True
                     await asyncio.sleep(4)
-                    await update.message.reply_text(f"✅ ضغطت على زر Create")
+                    await update.message.reply_text("✅ تم فتح Create Service")
                     break
             except:
                 continue
@@ -323,7 +241,6 @@ def main():
     t = threading.Thread(target=run_health_server, daemon=True)
     t.start()
     print("🌐 Health server على port 10000")
-    install_playwright()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
@@ -332,4 +249,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
