@@ -4,7 +4,7 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from patchright.async_api import async_playwright
+from playwright.async_api import async_playwright
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -69,13 +69,29 @@ async def run_automation(url: str, update: Update) -> str:
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--window-size=1280,800",
+            ]
         )
         ctx = await browser.new_context(
             viewport={"width": 1280, "height": 800},
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             locale="en-US",
             timezone_id="America/New_York",
+            ignore_https_errors=True,
         )
+        await ctx.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
+        """)
         page = await ctx.new_page()
 
         # المرحلة 1
@@ -241,4 +257,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
