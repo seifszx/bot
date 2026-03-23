@@ -6,17 +6,23 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
 
+# ── Health Server - يشتغل أول شيء ──
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is running!")
+        self.wfile.write(b"OK")
     def log_message(self, format, *args):
         pass
 
 def run_health_server():
     server = HTTPServer(("0.0.0.0", 10000), HealthHandler)
+    print("🌐 Health server يعمل على port 10000")
     server.serve_forever()
+
+# شغّل health server فوراً قبل أي شيء
+health_thread = threading.Thread(target=run_health_server, daemon=True)
+health_thread.start()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -74,10 +80,8 @@ async def run_automation(url: str, update: Update) -> str:
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-web-security",
-                "--allow-running-insecure-content",
                 "--disable-features=IsolateOrigins,site-per-process",
                 "--window-size=1280,800",
-                "--force-device-scale-factor=1",
             ]
         )
         ctx = await browser.new_context(
@@ -86,56 +90,41 @@ async def run_automation(url: str, update: Update) -> str:
             locale="en-US",
             timezone_id="America/New_York",
             ignore_https_errors=True,
-            java_script_enabled=True,
         )
         await ctx.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
             window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
-            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
         """)
         page = await ctx.new_page()
 
-        # المرحلة 1
         await update.message.reply_text("📡 المرحلة 1: فتح رابط Qwiklabs...")
         try:
             await page.goto(url, wait_until="commit", timeout=90000)
-            # انتظر حتى يكتمل تسجيل الدخول التلقائي
             await asyncio.sleep(10)
-            # انتظر أن نصل لـ Google Cloud Console
             try:
                 await page.wait_for_url("*console.cloud.google.com*", timeout=45000)
-                await update.message.reply_text("✅ تم تسجيل الدخول وصلنا لـ Google Cloud!")
+                await update.message.reply_text("✅ تم تسجيل الدخول!")
             except:
                 pass
         except Exception as e:
-            await update.message.reply_text(f"⚠️ خطأ في فتح الرابط: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ {str(e)[:80]}")
 
         await asyncio.sleep(3)
         await send_screenshot(page, update, "بعد فتح الرابط")
 
-        # المرحلة 2: موافقة SSO إن وجدت
-        await update.message.reply_text("🔐 المرحلة 2: فحص صفحة SSO...")
+        await update.message.reply_text("🔐 المرحلة 2: فحص SSO...")
         try:
-            for selector in [
-                "button:has-text('أفهم ذلك')",
-                "button:has-text('I understand')",
-                "button:has-text('Accept')",
-                "button:has-text('Continue')",
-            ]:
+            for selector in ["button:has-text('أفهم ذلك')", "button:has-text('I understand')", "button:has-text('Accept')", "button:has-text('Continue')"]:
                 btn = page.locator(selector)
                 if await btn.count() > 0:
                     await btn.first.click()
                     await asyncio.sleep(3)
-                    await update.message.reply_text("✅ تم الضغط على زر الموافقة")
                     break
         except:
             pass
 
-        # المرحلة 3: شروط Google Cloud
         await update.message.reply_text("📋 المرحلة 3: شروط Google Cloud...")
         try:
             await page.wait_for_load_state("networkidle", timeout=20000)
@@ -147,27 +136,20 @@ async def run_automation(url: str, update: Update) -> str:
             clicked = await safe_click(page, "button:has-text('Agree and continue')", 8000)
             if clicked:
                 await asyncio.sleep(4)
-                await update.message.reply_text("✅ تمت الموافقة على شروط Google Cloud")
+                await update.message.reply_text("✅ تمت الموافقة")
             else:
-                await update.message.reply_text("⏭️ تخطي الشروط...")
+                await update.message.reply_text("⏭️ تخطي...")
         except Exception as e:
-            await update.message.reply_text(f"⚠️ شروط: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ {str(e)[:80]}")
 
-        # المرحلة 4: Cloud Run
-        await update.message.reply_text("☁️ المرحلة 4: الذهاب إلى Cloud Run...")
+        await update.message.reply_text("☁️ المرحلة 4: Cloud Run...")
         await page.goto("https://console.cloud.google.com/run", wait_until="domcontentloaded", timeout=60000)
         await asyncio.sleep(6)
         await send_screenshot(page, update, "صفحة Cloud Run")
 
-        # المرحلة 5: Create Service
-        await update.message.reply_text("🔧 المرحلة 5: إنشاء Cloud Run Service...")
+        await update.message.reply_text("🔧 المرحلة 5: Create Service...")
         clicked = False
-        for selector in [
-            "button:has-text('Create service')",
-            "a:has-text('Create service')",
-            "button:has-text('Create Service')",
-            "button:has-text('Create')",
-        ]:
+        for selector in ["button:has-text('Create service')", "a:has-text('Create service')", "button:has-text('Create')"]:
             try:
                 el = page.locator(selector)
                 if await el.count() > 0:
@@ -189,15 +171,9 @@ async def run_automation(url: str, update: Update) -> str:
             await browser.close()
             return None
 
-        # المرحلة 6: Container Image
-        await update.message.reply_text("🐳 المرحلة 6: إدخال Container Image...")
+        await update.message.reply_text("🐳 المرحلة 6: Container Image...")
         try:
-            for selector in [
-                "input[placeholder*='Container image URL']",
-                "input[aria-label*='Container image']",
-                "input[placeholder*='container']",
-                "input[placeholder*='gcr.io']",
-            ]:
+            for selector in ["input[placeholder*='Container image URL']", "input[aria-label*='Container image']", "input[placeholder*='gcr.io']"]:
                 img_input = page.locator(selector)
                 if await img_input.count() > 0:
                     await img_input.first.fill("docker.io/seifszx/seifszx")
@@ -205,10 +181,9 @@ async def run_automation(url: str, update: Update) -> str:
                     await update.message.reply_text("✅ تم إدخال Container Image")
                     break
         except Exception as e:
-            await update.message.reply_text(f"⚠️ Container: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ {str(e)[:80]}")
 
-        # المرحلة 7: الإعدادات
-        await update.message.reply_text("⚙️ المرحلة 7: ضبط الإعدادات...")
+        await update.message.reply_text("⚙️ المرحلة 7: الإعدادات...")
         try:
             await safe_click(page, "label:has-text('Instance-based')", 10000)
             await asyncio.sleep(1)
@@ -218,12 +193,11 @@ async def run_automation(url: str, update: Update) -> str:
             max_input = page.locator("input[aria-label*='Maximum'], input[placeholder*='Maximum']")
             if await max_input.count() > 0:
                 await max_input.first.fill("16")
-            await update.message.reply_text("✅ الإعدادات: Instance-based, Min=1, Max=16")
+            await update.message.reply_text("✅ Instance-based, Min=1, Max=16")
         except Exception as e:
-            await update.message.reply_text(f"⚠️ الإعدادات: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ {str(e)[:80]}")
 
-        # المرحلة 8: Endpoint URL
-        await update.message.reply_text("🔗 المرحلة 8: استخراج Endpoint URL...")
+        await update.message.reply_text("🔗 المرحلة 8: Endpoint URL...")
         endpoint_url = ""
         try:
             for selector in ["text=.run.app", "[aria-label*='Endpoint']"]:
@@ -235,14 +209,13 @@ async def run_automation(url: str, update: Update) -> str:
         except:
             pass
 
-        # المرحلة 9: Create
-        await update.message.reply_text("🚀 المرحلة 9: الضغط على Create...")
+        await update.message.reply_text("🚀 المرحلة 9: Create...")
         try:
             await safe_click(page, "button:has-text('Create')", 10000)
             await asyncio.sleep(8)
-            await update.message.reply_text("✅ تم الضغط على Create!")
+            await update.message.reply_text("✅ تم!")
         except Exception as e:
-            await update.message.reply_text(f"⚠️ Create: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ {str(e)[:80]}")
 
         if not endpoint_url:
             try:
@@ -257,9 +230,6 @@ async def run_automation(url: str, update: Update) -> str:
         return endpoint_url
 
 def main():
-    t = threading.Thread(target=run_health_server, daemon=True)
-    t.start()
-    print("🌐 Health server على port 10000")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
