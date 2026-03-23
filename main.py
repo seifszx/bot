@@ -8,7 +8,6 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
 
-# ── Web server بسيط لإرضاء Render ──
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -23,10 +22,7 @@ def run_health_server():
 
 def install_playwright():
     print("🔧 جاري تحميل متصفح Chromium...")
-    subprocess.run(
-        [sys.executable, "-m", "playwright", "install", "chromium"],
-        check=True
-    )
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
     print("✅ تم تثبيت المتصفح بنجاح!")
 
 logging.basicConfig(level=logging.INFO)
@@ -48,15 +44,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
-
     url = update.message.text.strip()
-
     if not url.startswith("http"):
         await update.message.reply_text("❌ يرجى إرسال رابط صحيح يبدأ بـ http")
         return
-
     await update.message.reply_text("🚀 بدأت العملية... انتظر!")
-
     try:
         endpoint_url = await run_automation(url, update)
         if endpoint_url:
@@ -68,8 +60,17 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ انتهت العملية لكن لم أتمكن من استخراج الـ URL.")
     except Exception as e:
         logger.error(f"Error: {e}")
-        err_text = str(e)[:200]
-        await update.message.reply_text(f"❌ حدث خطأ:\n{err_text}")
+        await update.message.reply_text(f"❌ حدث خطأ:\n{str(e)[:200]}")
+
+async def safe_click(page, selector, timeout=30000):
+    """ضغط آمن مع انتظار"""
+    try:
+        el = page.locator(selector)
+        await el.first.wait_for(state="visible", timeout=timeout)
+        await el.first.click()
+        return True
+    except:
+        return False
 
 async def run_automation(url: str, update: Update) -> str:
     async with async_playwright() as p:
@@ -79,103 +80,146 @@ async def run_automation(url: str, update: Update) -> str:
         )
         ctx = await browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
         )
         page = await ctx.new_page()
 
+        # ── المرحلة 1 ──
         await update.message.reply_text("📡 المرحلة 1: فتح رابط Qwiklabs...")
-        await page.goto(url, wait_until="networkidle", timeout=60000)
-        await asyncio.sleep(3)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+        except:
+            await page.goto(url, timeout=90000)
+        await asyncio.sleep(5)
 
+        # ── المرحلة 2: Google SSO ──
         await update.message.reply_text("🔐 المرحلة 2: الموافقة على Google SSO...")
         try:
-            accept_btn = page.locator("button:has-text('أفهم ذلك'), button:has-text('I understand'), button:has-text('Accept')")
-            if await accept_btn.count() > 0:
-                await accept_btn.first.click()
-                await asyncio.sleep(2)
-                await update.message.reply_text("✅ تمت الموافقة على Google SSO")
-            else:
-                await update.message.reply_text("⏭️ لا توجد صفحة SSO، تخطي...")
+            # انتظر أي من هذه الأزرار
+            for selector in [
+                "button:has-text('أفهم ذلك')",
+                "button:has-text('I understand')",
+                "button:has-text('Accept')",
+                "button:has-text('Continue')",
+            ]:
+                try:
+                    btn = page.locator(selector)
+                    if await btn.count() > 0:
+                        await btn.first.click()
+                        await asyncio.sleep(3)
+                        break
+                except:
+                    continue
+            # انتظر التنقل
+            await page.wait_for_load_state("domcontentloaded", timeout=30000)
+            await asyncio.sleep(3)
+            await update.message.reply_text("✅ المرحلة 2 انتهت")
         except Exception as e:
-            await update.message.reply_text(f"⚠️ تخطي SSO: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ SSO: {str(e)[:80]}")
 
-        await update.message.reply_text("📋 المرحلة 3: الموافقة على شروط Google Cloud...")
+        # ── المرحلة 3: شروط Google Cloud ──
+        await update.message.reply_text("📋 المرحلة 3: شروط Google Cloud...")
         try:
-            await page.wait_for_selector("text=I agree to the Google Cloud Platform", timeout=15000)
+            # انتظر الصفحة تكتمل
+            await page.wait_for_load_state("networkidle", timeout=30000)
+            await asyncio.sleep(3)
+
+            # ابحث عن checkbox الموافقة
             checkbox = page.locator("input[type='checkbox']").first
-            if not await checkbox.is_checked():
-                await checkbox.click()
-                await asyncio.sleep(1)
-            agree_btn = page.locator("button:has-text('Agree and continue')")
-            if await agree_btn.count() > 0:
-                await agree_btn.first.click()
-                await asyncio.sleep(3)
+            if await checkbox.count() > 0:
+                is_checked = await checkbox.is_checked()
+                if not is_checked:
+                    await checkbox.click()
+                    await asyncio.sleep(1)
+
+            # اضغط Agree and continue
+            clicked = await safe_click(page, "button:has-text('Agree and continue')", 10000)
+            if clicked:
+                await asyncio.sleep(4)
                 await update.message.reply_text("✅ تمت الموافقة على شروط Google Cloud")
+            else:
+                await update.message.reply_text("⏭️ لا توجد شروط، تخطي...")
         except Exception as e:
-            await update.message.reply_text(f"⚠️ تخطي شروط Cloud: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ شروط Cloud: {str(e)[:80]}")
 
+        # ── المرحلة 4: Cloud Run ──
         await update.message.reply_text("☁️ المرحلة 4: الذهاب إلى Cloud Run...")
-        await page.goto("https://console.cloud.google.com/run", wait_until="networkidle", timeout=30000)
-        await asyncio.sleep(3)
+        await page.goto("https://console.cloud.google.com/run", wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(5)
 
+        # ── المرحلة 5: Create Service ──
         await update.message.reply_text("🔧 المرحلة 5: إنشاء Cloud Run Service...")
         try:
-            create_btn = page.locator("button:has-text('Create service'), a:has-text('Create service')")
-            await create_btn.first.wait_for(timeout=15000)
-            await create_btn.first.click()
-            await asyncio.sleep(3)
-            await update.message.reply_text("✅ تم فتح نافذة Create Service")
+            clicked = await safe_click(page, "button:has-text('Create service')", 30000)
+            if not clicked:
+                clicked = await safe_click(page, "a:has-text('Create service')", 10000)
+            if clicked:
+                await asyncio.sleep(4)
+                await update.message.reply_text("✅ تم فتح نافذة Create Service")
+            else:
+                await update.message.reply_text("❌ لم أجد زر Create Service")
+                await browser.close()
+                return None
         except Exception as e:
-            await update.message.reply_text(f"❌ خطأ في Create Service: {str(e)[:80]}")
+            await update.message.reply_text(f"❌ Create Service: {str(e)[:80]}")
             await browser.close()
             return None
 
+        # ── المرحلة 6: Container Image ──
         await update.message.reply_text("🐳 المرحلة 6: إدخال Container Image...")
         try:
-            img_input = page.locator("input[placeholder*='Container image URL'], input[aria-label*='Container image']")
-            await img_input.first.wait_for(timeout=15000)
-            await img_input.first.fill("docker.io/seifszx/seifszx")
-            await asyncio.sleep(1)
-            await update.message.reply_text("✅ تم إدخال Container Image")
+            for selector in [
+                "input[placeholder*='Container image URL']",
+                "input[aria-label*='Container image']",
+                "input[placeholder*='container']",
+            ]:
+                img_input = page.locator(selector)
+                if await img_input.count() > 0:
+                    await img_input.first.fill("docker.io/seifszx/seifszx")
+                    await asyncio.sleep(1)
+                    await update.message.reply_text("✅ تم إدخال Container Image")
+                    break
         except Exception as e:
-            await update.message.reply_text(f"⚠️ مشكلة في Container URL: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ Container URL: {str(e)[:80]}")
 
+        # ── المرحلة 7: الإعدادات ──
         await update.message.reply_text("⚙️ المرحلة 7: ضبط الإعدادات...")
         try:
-            instance_radio = page.locator("label:has-text('Instance-based')")
-            if await instance_radio.count() > 0:
-                await instance_radio.first.click()
-                await asyncio.sleep(1)
+            await safe_click(page, "label:has-text('Instance-based')", 10000)
+            await asyncio.sleep(1)
             min_input = page.locator("input[aria-label*='Minimum'], input[placeholder*='Minimum']")
             if await min_input.count() > 0:
                 await min_input.first.fill("1")
-                await asyncio.sleep(0.5)
             max_input = page.locator("input[aria-label*='Maximum'], input[placeholder*='Maximum']")
             if await max_input.count() > 0:
                 await max_input.first.fill("16")
-                await asyncio.sleep(0.5)
-            await update.message.reply_text("✅ تم ضبط الإعدادات: Instance-based, Min=1, Max=16")
+            await update.message.reply_text("✅ الإعدادات: Instance-based, Min=1, Max=16")
         except Exception as e:
-            await update.message.reply_text(f"⚠️ مشكلة في الإعدادات: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ الإعدادات: {str(e)[:80]}")
 
+        # ── المرحلة 8: Endpoint URL ──
         await update.message.reply_text("🔗 المرحلة 8: استخراج Endpoint URL...")
         endpoint_url = ""
         try:
-            endpoint_el = page.locator("text=.run.app")
-            if await endpoint_el.count() > 0:
-                endpoint_url = (await endpoint_el.first.inner_text()).strip()
+            for selector in ["text=.run.app", "[aria-label*='Endpoint']", "text=https://"]:
+                el = page.locator(selector)
+                if await el.count() > 0:
+                    endpoint_url = (await el.first.inner_text()).strip()
+                    if ".run.app" in endpoint_url:
+                        break
         except:
             pass
 
+        # ── المرحلة 9: Create ──
         await update.message.reply_text("🚀 المرحلة 9: الضغط على Create...")
         try:
-            final_create = page.locator("button:has-text('Create')").last
-            await final_create.click()
-            await asyncio.sleep(5)
-            await update.message.reply_text("✅ تم الضغط على Create! السيرفس قيد الإنشاء...")
+            await safe_click(page, "button:has-text('Create')", 10000)
+            await asyncio.sleep(8)
+            await update.message.reply_text("✅ تم الضغط على Create!")
         except Exception as e:
-            await update.message.reply_text(f"⚠️ مشكلة في Create: {str(e)[:80]}")
+            await update.message.reply_text(f"⚠️ Create: {str(e)[:80]}")
 
+        # محاولة أخيرة للـ URL
         if not endpoint_url:
             try:
                 await asyncio.sleep(5)
@@ -189,13 +233,10 @@ async def run_automation(url: str, update: Update) -> str:
         return endpoint_url
 
 def main():
-    # شغل health server في thread منفصل
     t = threading.Thread(target=run_health_server, daemon=True)
     t.start()
-    print("🌐 Health server يعمل على port 10000")
-
+    print("🌐 Health server على port 10000")
     install_playwright()
-
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
@@ -204,3 +245,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
