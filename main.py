@@ -3,6 +3,8 @@ import logging
 import subprocess
 import sys
 import threading
+import shutil
+import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -24,6 +26,25 @@ def install_playwright():
     print("🔧 جاري تحميل متصفح Chromium...")
     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
     print("✅ تم تثبيت المتصفح بنجاح!")
+
+def clear_browser_cache():
+    """مسح كل بيانات المتصفح"""
+    paths = [
+        "/tmp/playwright_chromium*",
+        os.path.expanduser("~/.cache/ms-playwright/chromium*/Default/Cache"),
+        os.path.expanduser("~/.cache/ms-playwright/chromium*/Default/Cookies"),
+    ]
+    for path in paths:
+        import glob
+        for p in glob.glob(path):
+            try:
+                if os.path.isdir(p):
+                    shutil.rmtree(p)
+                else:
+                    os.remove(p)
+            except:
+                pass
+    print("🧹 تم مسح الـ cache")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,7 +84,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ حدث خطأ:\n{str(e)[:200]}")
 
 async def send_screenshot(page, update, label):
-    """يأخذ screenshot ويرسله للمستخدم"""
     try:
         screenshot = await page.screenshot(full_page=False)
         await update.message.reply_photo(photo=screenshot, caption=f"📸 {label}")
@@ -80,15 +100,45 @@ async def safe_click(page, selector, timeout=30000):
         return False
 
 async def run_automation(url: str, update: Update) -> str:
+    # مسح cache قبل كل عملية
+    clear_browser_cache()
+    await update.message.reply_text("🧹 تم مسح بيانات المتصفح القديمة")
+
     async with async_playwright() as p:
+        # إعدادات تجعل المتصفح يبدو طبيعياً
         browser = await p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--window-size=1280,800",
+                "--start-maximized",
+                "--ignore-certificate-errors",
+            ]
         )
+
+        # Context جديد نظيف مع إعدادات طبيعية
         ctx = await browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            locale="en-US",
+            timezone_id="America/New_York",
+            permissions=["geolocation"],
+            java_script_enabled=True,
+            ignore_https_errors=True,
         )
+
+        # إخفاء علامات الأتمتة
+        await ctx.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
+        """)
+
         page = await ctx.new_page()
 
         # ── المرحلة 1 ──
@@ -96,9 +146,36 @@ async def run_automation(url: str, update: Update) -> str:
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=90000)
         except:
-            await page.goto(url, timeout=90000)
+            pass
         await asyncio.sleep(5)
         await send_screenshot(page, update, "بعد فتح الرابط")
+
+        # تحقق من "Couldn't sign you in"
+        page_content = await page.content()
+        if "Couldn't sign you in" in page_content or "couldn't sign" in page_content.lower():
+            await update.message.reply_text("⚠️ ظهرت مشكلة تسجيل الدخول، جاري إعادة المحاولة...")
+            await browser.close()
+            clear_browser_cache()
+            await asyncio.sleep(3)
+            # إعادة المحاولة مرة ثانية
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+                      "--disable-blink-features=AutomationControlled"]
+            )
+            ctx = await browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                locale="en-US",
+            )
+            await ctx.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                window.chrome = { runtime: {} };
+            """)
+            page = await ctx.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+            await asyncio.sleep(5)
+            await send_screenshot(page, update, "إعادة المحاولة")
 
         # ── المرحلة 2: SSO ──
         await update.message.reply_text("🔐 المرحلة 2: الموافقة على Google SSO...")
@@ -109,14 +186,11 @@ async def run_automation(url: str, update: Update) -> str:
                 "button:has-text('Accept')",
                 "button:has-text('Continue')",
             ]:
-                try:
-                    btn = page.locator(selector)
-                    if await btn.count() > 0:
-                        await btn.first.click()
-                        await asyncio.sleep(3)
-                        break
-                except:
-                    continue
+                btn = page.locator(selector)
+                if await btn.count() > 0:
+                    await btn.first.click()
+                    await asyncio.sleep(3)
+                    break
             await page.wait_for_load_state("domcontentloaded", timeout=30000)
             await asyncio.sleep(3)
             await update.message.reply_text("✅ المرحلة 2 انتهت")
@@ -148,46 +222,35 @@ async def run_automation(url: str, update: Update) -> str:
         await asyncio.sleep(6)
         await send_screenshot(page, update, "صفحة Cloud Run")
 
-        # أرسل عنوان الصفحة الحالية
-        current_url = page.url
-        await update.message.reply_text(f"🔗 الصفحة الحالية:\n{current_url[:200]}")
-
         # ── المرحلة 5: Create Service ──
         await update.message.reply_text("🔧 المرحلة 5: إنشاء Cloud Run Service...")
-        
-        # جرب كل المحاولات الممكنة
         clicked = False
         for selector in [
             "button:has-text('Create service')",
             "a:has-text('Create service')",
             "button:has-text('Create Service')",
-            "[data-testid*='create']",
             "button:has-text('Create')",
         ]:
             try:
                 el = page.locator(selector)
-                count = await el.count()
-                if count > 0:
+                if await el.count() > 0:
                     await el.first.click()
                     clicked = True
                     await asyncio.sleep(4)
-                    await update.message.reply_text(f"✅ ضغطت على: {selector}")
+                    await update.message.reply_text(f"✅ ضغطت على زر Create")
                     break
             except:
                 continue
 
         if not clicked:
-            # أرسل كل النصوص الموجودة في الصفحة
             try:
                 buttons = await page.locator("button").all_text_contents()
-                await update.message.reply_text(f"🔍 الأزرار الموجودة:\n{str(buttons)[:300]}")
+                await update.message.reply_text(f"🔍 الأزرار:\n{str(buttons)[:300]}")
             except:
                 pass
             await send_screenshot(page, update, "لم أجد زر Create")
             await browser.close()
             return None
-
-        await send_screenshot(page, update, "بعد Create Service")
 
         # ── المرحلة 6: Container Image ──
         await update.message.reply_text("🐳 المرحلة 6: إدخال Container Image...")
