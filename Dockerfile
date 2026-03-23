@@ -1,10 +1,3 @@
-FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY qwiklabs_bot.py .
-
-CMD ["python", "qwiklabs_bot.py"]
+python-telegram-bot==20.7
+playwright==1.41.0
+flask==3.0.0
