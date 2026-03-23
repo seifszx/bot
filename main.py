@@ -62,8 +62,15 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error: {e}")
         await update.message.reply_text(f"❌ حدث خطأ:\n{str(e)[:200]}")
 
+async def send_screenshot(page, update, label):
+    """يأخذ screenshot ويرسله للمستخدم"""
+    try:
+        screenshot = await page.screenshot(full_page=False)
+        await update.message.reply_photo(photo=screenshot, caption=f"📸 {label}")
+    except Exception as e:
+        await update.message.reply_text(f"📸 فشل screenshot: {str(e)[:80]}")
+
 async def safe_click(page, selector, timeout=30000):
-    """ضغط آمن مع انتظار"""
     try:
         el = page.locator(selector)
         await el.first.wait_for(state="visible", timeout=timeout)
@@ -91,11 +98,11 @@ async def run_automation(url: str, update: Update) -> str:
         except:
             await page.goto(url, timeout=90000)
         await asyncio.sleep(5)
+        await send_screenshot(page, update, "بعد فتح الرابط")
 
-        # ── المرحلة 2: Google SSO ──
+        # ── المرحلة 2: SSO ──
         await update.message.reply_text("🔐 المرحلة 2: الموافقة على Google SSO...")
         try:
-            # انتظر أي من هذه الأزرار
             for selector in [
                 "button:has-text('أفهم ذلك')",
                 "button:has-text('I understand')",
@@ -110,29 +117,22 @@ async def run_automation(url: str, update: Update) -> str:
                         break
                 except:
                     continue
-            # انتظر التنقل
             await page.wait_for_load_state("domcontentloaded", timeout=30000)
             await asyncio.sleep(3)
             await update.message.reply_text("✅ المرحلة 2 انتهت")
         except Exception as e:
             await update.message.reply_text(f"⚠️ SSO: {str(e)[:80]}")
 
-        # ── المرحلة 3: شروط Google Cloud ──
+        # ── المرحلة 3: شروط Cloud ──
         await update.message.reply_text("📋 المرحلة 3: شروط Google Cloud...")
         try:
-            # انتظر الصفحة تكتمل
             await page.wait_for_load_state("networkidle", timeout=30000)
             await asyncio.sleep(3)
-
-            # ابحث عن checkbox الموافقة
             checkbox = page.locator("input[type='checkbox']").first
             if await checkbox.count() > 0:
-                is_checked = await checkbox.is_checked()
-                if not is_checked:
+                if not await checkbox.is_checked():
                     await checkbox.click()
                     await asyncio.sleep(1)
-
-            # اضغط Agree and continue
             clicked = await safe_click(page, "button:has-text('Agree and continue')", 10000)
             if clicked:
                 await asyncio.sleep(4)
@@ -145,25 +145,49 @@ async def run_automation(url: str, update: Update) -> str:
         # ── المرحلة 4: Cloud Run ──
         await update.message.reply_text("☁️ المرحلة 4: الذهاب إلى Cloud Run...")
         await page.goto("https://console.cloud.google.com/run", wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(5)
+        await asyncio.sleep(6)
+        await send_screenshot(page, update, "صفحة Cloud Run")
+
+        # أرسل عنوان الصفحة الحالية
+        current_url = page.url
+        await update.message.reply_text(f"🔗 الصفحة الحالية:\n{current_url[:200]}")
 
         # ── المرحلة 5: Create Service ──
         await update.message.reply_text("🔧 المرحلة 5: إنشاء Cloud Run Service...")
-        try:
-            clicked = await safe_click(page, "button:has-text('Create service')", 30000)
-            if not clicked:
-                clicked = await safe_click(page, "a:has-text('Create service')", 10000)
-            if clicked:
-                await asyncio.sleep(4)
-                await update.message.reply_text("✅ تم فتح نافذة Create Service")
-            else:
-                await update.message.reply_text("❌ لم أجد زر Create Service")
-                await browser.close()
-                return None
-        except Exception as e:
-            await update.message.reply_text(f"❌ Create Service: {str(e)[:80]}")
+        
+        # جرب كل المحاولات الممكنة
+        clicked = False
+        for selector in [
+            "button:has-text('Create service')",
+            "a:has-text('Create service')",
+            "button:has-text('Create Service')",
+            "[data-testid*='create']",
+            "button:has-text('Create')",
+        ]:
+            try:
+                el = page.locator(selector)
+                count = await el.count()
+                if count > 0:
+                    await el.first.click()
+                    clicked = True
+                    await asyncio.sleep(4)
+                    await update.message.reply_text(f"✅ ضغطت على: {selector}")
+                    break
+            except:
+                continue
+
+        if not clicked:
+            # أرسل كل النصوص الموجودة في الصفحة
+            try:
+                buttons = await page.locator("button").all_text_contents()
+                await update.message.reply_text(f"🔍 الأزرار الموجودة:\n{str(buttons)[:300]}")
+            except:
+                pass
+            await send_screenshot(page, update, "لم أجد زر Create")
             await browser.close()
             return None
+
+        await send_screenshot(page, update, "بعد Create Service")
 
         # ── المرحلة 6: Container Image ──
         await update.message.reply_text("🐳 المرحلة 6: إدخال Container Image...")
@@ -172,6 +196,7 @@ async def run_automation(url: str, update: Update) -> str:
                 "input[placeholder*='Container image URL']",
                 "input[aria-label*='Container image']",
                 "input[placeholder*='container']",
+                "input[placeholder*='gcr.io']",
             ]:
                 img_input = page.locator(selector)
                 if await img_input.count() > 0:
@@ -201,7 +226,7 @@ async def run_automation(url: str, update: Update) -> str:
         await update.message.reply_text("🔗 المرحلة 8: استخراج Endpoint URL...")
         endpoint_url = ""
         try:
-            for selector in ["text=.run.app", "[aria-label*='Endpoint']", "text=https://"]:
+            for selector in ["text=.run.app", "[aria-label*='Endpoint']"]:
                 el = page.locator(selector)
                 if await el.count() > 0:
                     endpoint_url = (await el.first.inner_text()).strip()
@@ -219,7 +244,6 @@ async def run_automation(url: str, update: Update) -> str:
         except Exception as e:
             await update.message.reply_text(f"⚠️ Create: {str(e)[:80]}")
 
-        # محاولة أخيرة للـ URL
         if not endpoint_url:
             try:
                 await asyncio.sleep(5)
