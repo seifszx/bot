@@ -1,109 +1,77 @@
-"""
-بوت تيليجرام - Qwiklabs Full Automation
-"""
-
-import asyncio
 import logging
-import re
+import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+import os
 
-BOT_TOKEN       = "8531850036:AAHnfGVBm7PxNkPVeqUXdrOGD0C-apBGZDo"
-CONTAINER_IMAGE = "docker.io/seifszx/seifszx"
-HEADLESS        = True
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
-log = logging.getLogger(__name__)
+BOT_TOKEN = "8531850036:AAHnfGVBm7PxNkPVeqUXdrOGD0C-apBGZDo"
+WEB_URL = os.environ.get("WEB_URL", "http://localhost:10000")
 
-def is_valid_url(text):
-    return text.startswith("http://") or text.startswith("https://")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "مرحبا بيك في بوت يوهان 🤖\n\nارسل رابط لبدأ عمل"
+    )
 
-def extract_project_id(url):
-    m = re.search(r"project=([^&\s]+)", url)
-    return m.group(1) if m else ""
+async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+    url = update.message.text.strip()
+    if not url.startswith("http"):
+        await update.message.reply_text("❌ يرجى إرسال رابط صحيح يبدأ بـ http")
+        return
 
-async def safe_click(page, selector, desc, timeout=5000):
+    await update.message.reply_text("🚀 بدأت العملية... انتظر!")
+
     try:
-        loc = page.locator(selector).first
-        await loc.wait_for(state="visible", timeout=timeout)
-        await loc.click()
-        log.info(f"✅ {desc}")
-        await asyncio.sleep(2)
-        return True
-    except:
-        return False
-
-async def safe_fill(page, selector, value, desc, timeout=5000):
-    try:
-        loc = page.locator(selector).first
-        await loc.wait_for(state="visible", timeout=timeout)
-        await loc.triple_click()
-        await loc.fill(value)
-        log.info(f"✏️ {desc}: {value}")
-        await asyncio.sleep(1)
-        return True
-    except:
-        return False
-
-async def run_automation(url, status_cb):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=HEADLESS)
-        context = await browser.new_context(
-            viewport={"width": 1280, "height": 900},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+        # أرسل الرابط للـ web service
+        response = requests.post(
+            f"{WEB_URL}/run",
+            json={"url": url},
+            timeout=300
         )
-        page = await context.new_page()
+        data = response.json()
 
-        try:
-            await status_cb("🌐 جاري فتح الرابط...")
-            await page.goto(url, wait_until="domcontentloaded", timeout=40000)
-            await asyncio.sleep(3)
+        # أرسل كل الخطوات
+        steps = data.get("steps", [])
+        if steps:
+            msg = "\n".join(steps)
+            # قسّم الرسالة إذا كانت طويلة
+            if len(msg) > 4000:
+                for i in range(0, len(msg), 4000):
+                    await update.message.reply_text(msg[i:i+4000])
+            else:
+                await update.message.reply_text(msg)
 
-            await status_cb("🔄 الموافقة على صفحات Google...")
+        # أرسل الـ endpoint URL
+        endpoint = data.get("endpoint_url", "")
+        if endpoint:
+            await update.message.reply_text(
+                f"✅ تم بنجاح!\n\n🔗 Endpoint URL:\n`{endpoint}`",
+                parse_mode="Markdown"
+            )
+        elif data.get("error"):
+            await update.message.reply_text(f"❌ خطأ: {data['error'][:200]}")
+        else:
+            await update.message.reply_text("⚠️ انتهت العملية لكن لم أتمكن من استخراج الـ URL.")
 
-            for attempt in range(30):
-                await asyncio.sleep(3)
-                current_url = page.url
-                log.info(f"[{attempt}] {current_url[:80]}")
+    except requests.Timeout:
+        await update.message.reply_text("⏱️ انتهى الوقت - العملية تأخذ وقتاً طويلاً")
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        await update.message.reply_text(f"❌ حدث خطأ:\n{str(e)[:200]}")
 
-                if await safe_click(page,
-                    "button:has-text('أفهم ذلك'), button:has-text('I understand'), button:has-text('Got it')",
-                    "أفهم ذلك", 2000): continue
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
+    print("🤖 بوت يوهان يعمل...", flush=True)
+    app.run_polling()
 
-                if await safe_click(page,
-                    "button:has-text('Accept'), button:has-text('Continue'), button:has-text('موافق')",
-                    "Accept/Continue", 2000): continue
-
-                if await safe_click(page, "button:has-text('Join')", "Join", 2000): continue
-
-                if "console.cloud.google.com" in current_url:
-                    await status_cb("📋 قبول شروط Google Cloud...")
-
-                    # checkbox الشروط - أول checkbox في الصفحة
-                    try:
-                        cb = page.locator("input[type='checkbox']").first
-                        await cb.wait_for(state="visible", timeout=5000)
-                        if not await cb.is_checked():
-                            await cb.click()
-                            await asyncio.sleep(1)
-                    except: pass
-
-                    await safe_click(page,
-                        "button:has-text('Agree and continue'), text=Agree and continue",
-                        "Agree and continue", 5000)
-                    await asyncio.sleep(4)
-
-                    # Cloud Run
-                    await status_cb("☁️ الانتقال إلى Cloud Run...")
-                    project_id = extract_project_id(current_url)
-                    run_url = f"https://console.cloud.google.com/run?project={project_id}" if project_id else "https://console.cloud.google.com/run"
-                    await page.goto(run_url, wait_until="domcontentloaded", timeout=30000)
-                    await asyncio.sleep(5)
-
-                    # Create service button
-                    await status_cb("🚀 فتح Create service...")
-                    if not await safe_click(page,
+if __name__ == "__main__":
+    main()
                         "button:has-text('Create service'), a:has-text('Create service')",
                         "Create service", 10000):
                         await browser.close()
