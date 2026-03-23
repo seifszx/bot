@@ -20,7 +20,6 @@ def run_health_server():
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 BOT_TOKEN = "8531850036:AAHnfGVBm7PxNkPVeqUXdrOGD0C-apBGZDo"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -67,14 +66,14 @@ async def safe_click(page, selector, timeout=30000):
 
 async def run_automation(url: str, update: Update) -> str:
     async with async_playwright() as p:
+        # headless=False مع xvfb يحل مشكلة الصفحة السوداء
         browser = await p.chromium.launch(
-            headless=True,
+            headless=False,
             args=[
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
                 "--window-size=1280,800",
             ]
         )
@@ -90,7 +89,6 @@ async def run_automation(url: str, update: Update) -> str:
             Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
             window.chrome = { runtime: {} };
-            Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
         """)
         page = await ctx.new_page()
 
@@ -100,33 +98,36 @@ async def run_automation(url: str, update: Update) -> str:
             await page.goto(url, wait_until="domcontentloaded", timeout=90000)
         except:
             pass
-        await asyncio.sleep(5)
+        await asyncio.sleep(8)
         await send_screenshot(page, update, "بعد فتح الرابط")
 
-        # المرحلة 2: SSO
-        await update.message.reply_text("🔐 المرحلة 2: الموافقة على Google SSO...")
+        # المرحلة 2: SSO - انتظر أكثر لأن الصفحة تمر بمراحل
+        await update.message.reply_text("🔐 المرحلة 2: انتظار تسجيل الدخول التلقائي...")
         try:
+            # انتظر حتى تختفي صفحة تسجيل الدخول
+            await page.wait_for_url("**/console.cloud.google.com/**", timeout=60000)
+            await update.message.reply_text("✅ تم تسجيل الدخول!")
+        except:
+            # جرب الضغط على أي زرار ظاهر
             for selector in [
                 "button:has-text('أفهم ذلك')",
                 "button:has-text('I understand')",
                 "button:has-text('Accept')",
                 "button:has-text('Continue')",
+                "button:has-text('Next')",
             ]:
                 btn = page.locator(selector)
                 if await btn.count() > 0:
                     await btn.first.click()
                     await asyncio.sleep(3)
                     break
-            await page.wait_for_load_state("domcontentloaded", timeout=30000)
-            await asyncio.sleep(3)
-            await update.message.reply_text("✅ المرحلة 2 انتهت")
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ SSO: {str(e)[:80]}")
+            await asyncio.sleep(5)
+            await send_screenshot(page, update, "بعد المحاولة")
 
         # المرحلة 3: شروط Cloud
         await update.message.reply_text("📋 المرحلة 3: شروط Google Cloud...")
         try:
-            await page.wait_for_load_state("networkidle", timeout=30000)
+            await page.wait_for_load_state("networkidle", timeout=20000)
             await asyncio.sleep(3)
             checkbox = page.locator("input[type='checkbox']").first
             if await checkbox.count() > 0:
@@ -257,3 +258,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
